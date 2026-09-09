@@ -120,6 +120,8 @@ typedef struct
 typedef struct
 {
   GtkWidget   *win;
+  GtkWidget   *focuswin;
+  gboolean     focus_helper_state;
   AppIndicator *trayicon;
 
   GdkCursor   *paint_cursor;
@@ -181,6 +183,8 @@ typedef struct
 void toggle_visibility (GromitData *data);
 void hide_window (GromitData *data);
 void show_window (GromitData *data);
+
+void focus_helper_set_active (GromitData *data, gboolean on);
 
 void parse_print_help (gpointer key, gpointer value, gpointer user_data);
 

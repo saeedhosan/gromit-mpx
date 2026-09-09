@@ -419,6 +419,10 @@ void release_grab (GromitData *data,
 
       indicate_active(data, FALSE);
 
+      /* withdraw the focus helper as soon as we stop grabbing, even if
+         annotations remain visible (data->painted) */
+      focus_helper_set_active(data, FALSE);
+
       if (!data->painted)
 	  hide_window (data);
 
@@ -441,7 +445,12 @@ void release_grab (GromitData *data,
         g_printerr ("DEBUG: Ungrabbed Device '%s'.\n", gdk_device_get_name(devdata->device));
 
       if(!get_are_some_grabbed(data))
+	{
 	  indicate_active(data, FALSE);
+	  /* withdraw the focus helper as soon as we stop grabbing, even if
+	     annotations remain visible (data->painted) */
+	  focus_helper_set_active(data, FALSE);
+	}
     }
 
   if (!data->painted)
