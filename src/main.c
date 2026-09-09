@@ -163,6 +163,59 @@ void paint_context_free (GromitPaintContext *context)
 }
 
 
+#ifdef GDK_WINDOWING_X11
+static gboolean on_focus_helper_draw (GtkWidget *widget,
+                                      cairo_t   *cr,
+                                      gpointer   user_data)
+{
+  /* paint the focus helper fully transparent */
+  cairo_set_operator (cr, CAIRO_OPERATOR_SOURCE);
+  cairo_set_source_rgba (cr, 0, 0, 0, 0);
+  cairo_paint (cr);
+  return TRUE;
+}
+
+static gboolean focus_helper_apply_idle (gpointer user_data)
+{
+  GromitData *data = user_data;
+  if (!data->focuswin)
+    return G_SOURCE_REMOVE;
+
+  if (data->focus_helper_state)
+    {
+      if (!gtk_widget_get_visible (data->focuswin))
+        {
+          gtk_widget_show (data->focuswin);
+          gtk_window_present (GTK_WINDOW (data->focuswin));
+        }
+    }
+  else
+    {
+      /* hide and withdraw unconditionally, so the fullscreen helper cannot
+         stay mapped on top blocking clicks and focus once we stop grabbing */
+      if (gtk_widget_get_visible (data->focuswin))
+        gtk_widget_hide (data->focuswin);
+      if (gdk_window_is_visible (gtk_widget_get_window (data->focuswin)))
+        gdk_window_withdraw (gtk_widget_get_window (data->focuswin));
+    }
+  return G_SOURCE_REMOVE;
+}
+
+/* Must not touch the window synchronously: show_window()/hide_window() and
+   the grab release run while the main loop is re-entered during the --toggle
+   selection handshake, and manipulating the window there re-delivers the
+   toggle, toggling back in immediately.  Delay the actual work to an idle
+   handler and remember the latest requested state so rapid out/in keeps the
+   helper consistent. */
+void focus_helper_set_active (GromitData *data, gboolean on)
+{
+  if (!data->focuswin)
+    return;
+  data->focus_helper_state = on;
+  g_idle_add (focus_helper_apply_idle, data);
+}
+#endif
+
 void hide_window (GromitData *data)
 {
   if (!data->hidden)
@@ -180,6 +233,12 @@ void hide_window (GromitData *data)
       data->hidden = 1;
       release_grab (data, NULL); /* release all */
       gtk_widget_hide (data->win);
+
+#ifdef GDK_WINDOWING_X11
+      /* hide + withdraw the focus helper so it cannot stay mapped on top
+         and grab clicks/focus once we stop painting */
+      focus_helper_set_active (data, FALSE);
+#endif
 
       if(data->debug)
         g_printerr ("DEBUG: Hiding window.\n");
@@ -209,6 +268,14 @@ void show_window (GromitData *data)
         g_printerr ("DEBUG: Showing window.\n");
     }
   gdk_window_raise (gtk_widget_get_window(data->win));
+
+#ifdef GDK_WINDOWING_X11
+  /* When painting we need keyboard input / modifier tracking, which under
+   * XWayland requires that an X11 window has keyboard focus. Give it to our
+   * transparent focus helper so the F9 hotkey and color modifiers keep
+   * working. */
+  focus_helper_set_active (data, TRUE);
+#endif
 }
 
 
@@ -1276,6 +1343,35 @@ int main (int argc, char **argv)
   gtk_selection_owner_set (data->win, GA_DATA, GDK_CURRENT_TIME);
   gtk_selection_add_target (data->win, GA_DATA, GA_TOGGLEDATA, 1007);
   gtk_selection_add_target (data->win, GA_DATA, GA_LINEDATA, 1008);
+
+#ifdef GDK_WINDOWING_X11
+  /*
+    init our focus helper window (used only under Wayland/XWayland,
+    harmless elsewhere). A normal (non override-redirect) fullscreen,
+    fully transparent X11 window that is kept focused while painting.
+    Under XWayland the X server only reports key events and modifier
+    state to a client when one of its windows holds keyboard focus;
+    the drawing overlay is an override-redirect popup that can never
+    take focus, so without this helper the F9 hotkey and the Shift/Ctrl/
+    Alt coloring modifiers would not work while drawing.
+  */
+  data->focuswin = gtk_window_new (GTK_WINDOW_TOPLEVEL);
+  on_screen_changed (data->focuswin, NULL, data);
+
+  gtk_window_fullscreen (GTK_WINDOW (data->focuswin));
+  gtk_window_set_skip_taskbar_hint (GTK_WINDOW (data->focuswin), TRUE);
+  gtk_window_set_decorated (GTK_WINDOW (data->focuswin), FALSE);
+  gtk_window_set_keep_above (GTK_WINDOW (data->focuswin), TRUE);
+  gtk_window_set_accept_focus (GTK_WINDOW (data->focuswin), TRUE);
+  gtk_widget_set_app_paintable (data->focuswin, TRUE);
+  gtk_widget_set_events (data->focuswin, GDK_KEY_PRESS_MASK | GDK_KEY_RELEASE_MASK);
+
+  g_signal_connect (data->focuswin, "delete-event", gtk_main_quit, NULL);
+  g_signal_connect (data->focuswin, "draw",
+                    G_CALLBACK (on_focus_helper_draw), NULL);
+
+  gtk_widget_realize (data->focuswin);
+#endif
 
 
 
